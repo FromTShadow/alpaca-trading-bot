@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trading Bot Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0f1117;
+      --surface: #1a1d27;
+      --border:  #2a2d3a;
+      --text:    #e2e8f0;
+      --muted:   #8892a4;
+      --green:   #22c55e;
+      --red:     #ef4444;
+      --blue:    #3b82f6;
+      --yellow:  #f59e0b;
+      --radius:  10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    header h1 { font-size: 16px; font-weight: 700; }
+    #refresh-badge { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+    .dot { width: 7px; height: 7px; background: var(--green); border-radius: 50%; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    main {
+      padding: 20px;
+      max-width: 960px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+    .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 8px; }
+    .card .value { font-size: 22px; font-weight: 700; }
+    .card .sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    .budget-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+    .budget-header { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .budget-header strong { color: var(--text); }
+    .bar-track { height: 8px; background: var(--border); border-radius: 99px; overflow: hidden; }
+    .bar-fill  { height: 100%; border-radius: 99px; background: var(--blue); transition: width .4s; }
+    .bar-fill.warn { background: var(--yellow); }
+    .bar-fill.full { background: var(--red); }
+
+    .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 10px; }
+
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
+    .mono { font-family: "SF Mono","Fira Code",monospace; font-size: 13px; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .b-green  { background: rgba(34,197,94,.15);  color: var(--green); }
+    .b-red    { background: rgba(239,68,68,.15);   color: var(--red); }
+    .b-blue   { background: rgba(59,130,246,.15);  color: var(--blue); }
+    .b-yellow { background: rgba(245,158,11,.15);  color: var(--yellow); }
+
+    .pos  { color: var(--green); }
+    .neg  { color: var(--red); }
+    .neut { color: var(--muted); }
+
+    .wr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+    .wr-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+    .wr-card .sym    { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+    .wr-card .wr     { font-size: 22px; font-weight: 700; }
+    .wr-card .wr-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .wr-card .alloc  { font-size: 11px; color: var(--blue); margin-top: 6px; }
+    .wr-bar-track    { height: 4px; background: var(--border); border-radius: 99px; overflow: hidden; margin-top: 8px; }
+    .wr-bar-fill     { height: 100%; border-radius: 99px; }
+
+    .empty { padding: 28px; text-align: center; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 520px) {
+      th, td { padding: 9px 10px; font-size: 13px; }
+      .card .value { font-size: 18px; }
+      .hide-sm { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>&#x1F4C8; Trading Bot Dashboard</h1>
+  <div id="refresh-badge">
+    <span class="dot"></span>
+    <span id="ts">Loading&hellip;</span>
+  </div>
+</header>
+
+<main>
+  <div class="cards">
+    <div class="card"><div class="label">Open Positions</div><div class="value" id="c-pos">—</div></div>
+    <div class="card"><div class="label">Today's Trades</div><div class="value" id="c-trades">—</div></div>
+    <div class="card"><div class="label">Today's P&amp;L</div><div class="value" id="c-pnl">—</div></div>
+    <div class="card"><div class="label">Budget Left</div><div class="value" id="c-budget">—</div><div class="sub" id="c-bsub"></div></div>
+  </div>
+
+  <div class="budget-wrap">
+    <div class="budget-header">
+      <span>Daily Budget Used</span>
+      <strong id="budget-lbl">—</strong>
+    </div>
+    <div class="bar-track"><div class="bar-fill" id="budget-bar" style="width:0%"></div></div>
+  </div>
+
+  <div>
+    <div class="section-title">Open Positions</div>
+    <div class="table-wrap" id="pos-wrap"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <div>
+    <div class="section-title">Today's Closed Trades</div>
+    <div class="table-wrap" id="trades-wrap"><div class="empty">Loading&hellip;</div></div>
+  </div>
+
+  <div>
+    <div class="section-title">Per-Stock Performance</div>
+    <div class="wr-grid" id="wr-grid"><div class="empty">Loading&hellip;</div></div>
+  </div>
+</main>
+
+<script>
+function fmtPL(n) {
+  const v = parseFloat(n);
+  return (v >= 0 ? '+' : '') + '$' + Math.abs(v).toFixed(2);
+}
+function plClass(n) { return parseFloat(n) >= 0 ? 'pos' : 'neg'; }
+
+function exitBadge(r) {
+  const map = {
+    signal:      ['b-blue',   'Signal'],
+    take_profit: ['b-green',  'Take Profit'],
+    stop_loss:   ['b-red',    'Stop Loss'],
+    sl_or_tp:    ['b-yellow', 'SL / TP'],
+    unknown:     ['b-yellow', 'Unknown'],
+  };
+  const [cls, lbl] = map[r] || ['b-yellow', r];
+  return '<span class="badge ' + cls + '">' + lbl + '</span>';
+}
+
+async function refresh() {
+  let d;
+  try {
+    d = await fetch('/api/data').then(r => r.json());
+  } catch(e) {
+    document.getElementById('ts').textContent = 'Connection error — retrying…';
+    return;
+  }
+
+  // Stat cards
+  document.getElementById('c-pos').textContent = d.open_positions.length;
+  document.getElementById('c-trades').textContent = d.today_trades.length;
+
+  const todayPL = d.today_trades.reduce(function(s, t){ return s + parseFloat(t.profit_loss || 0); }, 0);
+  const plEl = document.getElementById('c-pnl');
+  plEl.textContent = fmtPL(todayPL);
+  plEl.className = 'value ' + plClass(todayPL);
+
+  const spent = d.daily_spend, total = d.max_daily_spend, left = d.budget_remaining;
+  document.getElementById('c-budget').textContent = '$' + left.toFixed(2);
+  document.getElementById('c-bsub').textContent = 'spent $' + spent.toFixed(2) + ' of $' + total.toFixed(2);
+
+  // Budget bar
+  const pct = Math.min(100, spent / total * 100);
+  const bar = document.getElementById('budget-bar');
+  bar.style.width = pct + '%';
+  bar.className = 'bar-fill' + (pct >= 100 ? ' full' : pct >= 75 ? ' warn' : '');
+  document.getElementById('budget-lbl').textContent = '$' + spent.toFixed(2) + ' / $' + total.toFixed(2);
+
+  // Open positions
+  const posWrap = document.getElementById('pos-wrap');
+  if (!d.open_positions.length) {
+    posWrap.innerHTML = '<div class="empty">No open positions right now.</div>';
+  } else {
+    var rows = d.open_positions.map(function(p) {
+      var upl = parseFloat(p.unrealized_pl || 0);
+      return '<tr>'
+        + '<td><strong>' + p.symbol + '</strong></td>'
+        + '<td class="mono">' + p.qty + '</td>'
+        + '<td class="mono">$' + parseFloat(p.buy_price).toFixed(2) + '</td>'
+        + '<td class="mono">$' + parseFloat(p.current_price || p.buy_price).toFixed(2) + '</td>'
+        + '<td class="mono ' + plClass(upl) + '">' + fmtPL(upl) + '</td>'
+        + '<td class="hide-sm" style="color:var(--muted);font-size:12px">' + (p.buy_time || '—') + '</td>'
+        + '</tr>';
+    }).join('');
+    posWrap.innerHTML = '<table><thead><tr>'
+      + '<th>Symbol</th><th>Qty</th><th>Entry</th><th>Current</th><th>Unreal. P&L</th><th class="hide-sm">Entry Time</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // Today's trades
+  const trWrap = document.getElementById('trades-wrap');
+  if (!d.today_trades.length) {
+    trWrap.innerHTML = '<div class="empty">No completed trades today yet.</div>';
+  } else {
+    var trows = d.today_trades.map(function(t) {
+      return '<tr>'
+        + '<td><strong>' + t.symbol + '</strong></td>'
+        + '<td class="mono">' + t.qty + '</td>'
+        + '<td class="mono">$' + parseFloat(t.buy_price).toFixed(2) + '</td>'
+        + '<td class="mono">$' + parseFloat(t.sell_price).toFixed(2) + '</td>'
+        + '<td class="mono ' + plClass(t.profit_loss) + '">'
+          + fmtPL(t.profit_loss)
+          + ' <span style="font-size:11px;color:var(--muted)">(' + parseFloat(t.profit_loss_pct).toFixed(2) + '%)</span>'
+        + '</td>'
+        + '<td class="hide-sm">' + exitBadge(t.exit_reason) + '</td>'
+        + '</tr>';
+    }).join('');
+    trWrap.innerHTML = '<table><thead><tr>'
+      + '<th>Symbol</th><th>Qty</th><th>Buy</th><th>Sell</th><th>P&L</th><th class="hide-sm">Exit</th>'
+      + '</tr></thead><tbody>' + trows + '</tbody></table>';
+  }
+
+  // Win-rate grid
+  const wrGrid = document.getElementById('wr-grid');
+  wrGrid.innerHTML = d.symbol_stats.map(function(s) {
+    var wrNum  = s.total > 0 ? s.wins / s.total : 0;
+    var wrStr  = s.total > 0 ? Math.round(wrNum * 100) + '%' : '—';
+    var cls    = s.total === 0 ? 'neut' : (wrNum >= 0.5 ? 'pos' : 'neg');
+    var barClr = wrNum >= 0.5 ? 'var(--green)' : 'var(--red)';
+    var alloc  = (s.weight * 100).toFixed(1);
+    var budg   = (s.weight * d.max_daily_spend).toFixed(2);
+    return '<div class="wr-card">'
+      + '<div class="sym">' + s.symbol + '</div>'
+      + '<div class="wr ' + cls + '">' + wrStr + '</div>'
+      + '<div class="wr-sub">' + s.wins + 'W / ' + (s.total - s.wins) + 'L (' + s.total + ' trades)</div>'
+      + '<div class="alloc">&#x25CF; ' + alloc + '% alloc &middot; $' + budg + '</div>'
+      + '<div class="wr-bar-track"><div class="wr-bar-fill" style="width:' + (wrNum*100) + '%;background:' + barClr + '"></div></div>'
+      + '</div>';
+  }).join('');
+
+  document.getElementById('ts').textContent =
+    'Live · ' + new Date().toLocaleTimeString() + ' · next in 60s';
+}
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
