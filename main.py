@@ -1,4 +1,5 @@
 import os
+import sys
 import csv
 import logging
 import threading
@@ -27,6 +28,10 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
+# Set to False when you are ready to trade with real money.
+# WARNING: False will place REAL orders against your live brokerage account.
+PAPER_MODE = True
+
 SYMBOLS         = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN"]
 MAX_DAILY_SPEND = 80.0
 STOP_LOSS_PCT   = 0.02
@@ -63,7 +68,7 @@ log.setLevel(logging.ERROR)   # silence Flask request noise
 api_key    = os.environ["ALPACA_API_KEY"]
 secret_key = os.environ["ALPACA_SECRET_KEY"]
 
-trading_client = TradingClient(api_key, secret_key, paper=True)
+trading_client = TradingClient(api_key, secret_key, paper=PAPER_MODE)
 data_client    = StockHistoricalDataClient(api_key, secret_key)
 
 # ── Shared state (protected by state_lock) ────────────────────────────────────
@@ -525,9 +530,90 @@ def run_flask():
     app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
 
 
+# ── Startup safety check ──────────────────────────────────────────────────────
+def startup_safety_check() -> bool:
+    """
+    Verifies the account is safe to trade before the bot starts.
+    Returns True (GO) or False (NO-GO) and always prints a clear status block.
+    """
+    mode_label = "PAPER TRADING" if PAPER_MODE else "*** LIVE TRADING — REAL MONEY ***"
+    divider    = "=" * 60
+
+    logger.info(divider)
+    logger.info(f"  STARTUP SAFETY CHECK  |  Mode: {mode_label}")
+    logger.info(divider)
+
+    checks   = {}   # label -> (passed: bool, detail: str)
+    go       = True
+
+    # 1. API connectivity + fetch account
+    try:
+        account = trading_client.get_account()
+    except Exception as e:
+        logger.error(f"  [FAIL] Cannot connect to Alpaca: {e}")
+        logger.info(divider)
+        logger.info("  RESULT: NO-GO — fix API connectivity before starting.")
+        logger.info(divider)
+        return False
+
+    # 2. Account status (alpaca-py returns an enum like AccountStatus.ACTIVE)
+    raw_status = account.status
+    status_str = (raw_status.value if hasattr(raw_status, "value") else str(raw_status)).upper()
+    ok         = "ACTIVE" in status_str
+    checks["Account status"] = (ok, status_str)
+    if not ok:
+        go = False
+
+    # 3. Account not blocked
+    acct_blocked = bool(account.account_blocked)
+    checks["Account not blocked"] = (not acct_blocked, "blocked" if acct_blocked else "clear")
+
+    # 4. Trading not blocked
+    trade_blocked = bool(account.trading_blocked)
+    checks["Trading not blocked"] = (not trade_blocked, "blocked" if trade_blocked else "clear")
+    if acct_blocked or trade_blocked:
+        go = False
+
+    # 5. Minimum balance ($100)
+    cash = float(account.cash)
+    ok   = cash >= 100.0
+    checks[f"Cash balance ≥ $100"] = (ok, f"${cash:,.2f}")
+    if not ok:
+        go = False
+
+    # 6. Pattern Day Trader flag (warning only, doesn't block)
+    pdt = bool(account.pattern_day_trader)
+    checks["Pattern Day Trader flag"] = (
+        not pdt,
+        "PDT flagged — only 3 day-trades per 5 days unless account > $25k" if pdt else "not flagged",
+    )
+
+    # Print each check
+    for label, (passed, detail) in checks.items():
+        icon = "PASS" if passed else "FAIL"
+        # PDT is just a warning
+        if label.startswith("Pattern") and not passed:
+            icon = "WARN"
+        logger.info(f"  [{icon}] {label}: {detail}")
+
+    # Overall result
+    logger.info(divider)
+    if go:
+        logger.info(f"  RESULT: GO — bot will start in {mode_label} mode.")
+    else:
+        logger.info("  RESULT: NO-GO — resolve the issues above before starting.")
+    logger.info(divider)
+
+    return go
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     ensure_csv_exists()
+
+    # Safety check — exits with code 1 on NO-GO
+    if not startup_safety_check():
+        sys.exit(1)
 
     logger.info("Trading bot starting up.")
     logger.info(f"Watching: {', '.join(SYMBOLS)}")
