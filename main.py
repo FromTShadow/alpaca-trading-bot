@@ -24,6 +24,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+from alpaca.data.enums import DataFeed
 
 load_dotenv()
 
@@ -145,6 +146,7 @@ def get_bars(symbol: str) -> pd.DataFrame:
         start=start,
         end=end,
         limit=60,
+        feed=DataFeed.IEX,
     )
     bars = data_client.get_stock_bars(req)
     df   = bars.df
