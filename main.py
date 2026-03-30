@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
-    StopLossRequest,
-    TakeProfitRequest,
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -162,17 +160,13 @@ def get_position(symbol: str):
         return None
 
 
-def place_bracket_order(symbol: str, qty: int, price: float):
-    stop_price        = round(price * (1 - STOP_LOSS_PCT),   2)
-    take_profit_price = round(price * (1 + TAKE_PROFIT_PCT), 2)
+def place_fractional_order(symbol: str, notional: float):
+    """Buy a dollar-notional amount of a stock as a fractional market order."""
     return trading_client.submit_order(MarketOrderRequest(
         symbol=symbol,
-        qty=qty,
+        notional=round(notional, 2),
         side=OrderSide.BUY,
         time_in_force=TimeInForce.DAY,
-        order_class="bracket",
-        stop_loss=StopLossRequest(stop_price=stop_price),
-        take_profit=TakeProfitRequest(limit_price=take_profit_price),
     ))
 
 
@@ -358,6 +352,57 @@ def run_strategy() -> None:
 
             with state_lock:
                 in_trade = symbol in open_trades
+                entry    = open_trades.get(symbol)
+
+            # Manual SL / TP check (fractional orders don't support bracket orders)
+            if in_trade and entry and position is not None:
+                buy_px     = entry["buy_price"]
+                sl_trigger = buy_px * (1 - STOP_LOSS_PCT)
+                tp_trigger = buy_px * (1 + TAKE_PROFIT_PCT)
+
+                if price <= sl_trigger:
+                    logger.info(
+                        f"{symbol}: STOP-LOSS triggered. Price ${price:.2f} ≤ SL ${sl_trigger:.2f}. Closing."
+                    )
+                    trading_client.close_position(symbol)
+                    with state_lock:
+                        closed_entry = open_trades.pop(symbol, None)
+                    if closed_entry:
+                        now_str = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
+                        record  = build_trade_record(
+                            symbol=symbol, qty=closed_entry["qty"],
+                            buy_time=closed_entry["buy_time"], buy_price=closed_entry["buy_price"],
+                            ma_short_buy=closed_entry["ma_short"], ma_long_buy=closed_entry["ma_long"],
+                            sell_time=now_str, sell_price=price,
+                            ma_short_sell=ma_s_now, ma_long_sell=ma_l_now,
+                            exit_reason="stop_loss",
+                        )
+                        append_trade(record)
+                        pl = (price - closed_entry["buy_price"]) * closed_entry["qty"]
+                        logger.info(f"{symbol}: SL closed. P&L ${pl:.2f}")
+                    continue
+
+                elif price >= tp_trigger:
+                    logger.info(
+                        f"{symbol}: TAKE-PROFIT triggered. Price ${price:.2f} ≥ TP ${tp_trigger:.2f}. Closing."
+                    )
+                    trading_client.close_position(symbol)
+                    with state_lock:
+                        closed_entry = open_trades.pop(symbol, None)
+                    if closed_entry:
+                        now_str = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
+                        record  = build_trade_record(
+                            symbol=symbol, qty=closed_entry["qty"],
+                            buy_time=closed_entry["buy_time"], buy_price=closed_entry["buy_price"],
+                            ma_short_buy=closed_entry["ma_short"], ma_long_buy=closed_entry["ma_long"],
+                            sell_time=now_str, sell_price=price,
+                            ma_short_sell=ma_s_now, ma_long_sell=ma_l_now,
+                            exit_reason="take_profit",
+                        )
+                        append_trade(record)
+                        pl = (price - closed_entry["buy_price"]) * closed_entry["qty"]
+                        logger.info(f"{symbol}: TP closed. P&L ${pl:.2f}")
+                    continue
 
             # BUY
             if crossed_above:
@@ -369,30 +414,27 @@ def run_strategy() -> None:
                     with state_lock:
                         budget_left = min(sym_budget, MAX_DAILY_SPEND - daily_spend)
 
-                    if budget_left <= 0:
+                    if budget_left < 1.0:
                         logger.info(f"{symbol}: Bullish crossover — budget exhausted ({weight*100:.1f}% alloc). Skipping.")
                         continue
 
-                    qty  = max(1, int(budget_left // price))
-                    cost = qty * price
+                    notional = round(budget_left, 2)
+                    est_qty  = round(notional / price, 6)
+                    now_str  = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
 
-                    if cost > budget_left:
-                        logger.info(f"{symbol}: Bullish crossover — not enough budget (need ${cost:.2f}, have ${budget_left:.2f}). Skipping.")
-                        continue
-
-                    now_str = datetime.now(EST).strftime("%Y-%m-%d %H:%M:%S")
                     logger.info(
-                        f"{symbol}: BUY {qty} @ ~${price:.2f} (cost ~${cost:.2f}, "
+                        f"{symbol}: BUY ${notional:.2f} notional (~{est_qty} shares @ ${price:.2f}, "
                         f"alloc {weight*100:.1f}%) | MA9={ma_s_now:.2f} MA21={ma_l_now:.2f}"
                     )
-                    order = place_bracket_order(symbol, qty, price)
+                    order = place_fractional_order(symbol, notional)
 
                     with state_lock:
-                        daily_spend += cost
+                        daily_spend += notional
                         open_trades[symbol] = {
                             "buy_time":  now_str,
                             "buy_price": price,
-                            "qty":       qty,
+                            "qty":       est_qty,
+                            "notional":  notional,
                             "ma_short":  ma_s_now,
                             "ma_long":   ma_l_now,
                             "order_id":  str(order.id),
@@ -400,7 +442,7 @@ def run_strategy() -> None:
 
                     logger.info(
                         f"{symbol}: Order {order.id} placed. "
-                        f"SL=${price*(1-STOP_LOSS_PCT):.2f}  TP=${price*(1+TAKE_PROFIT_PCT):.2f}  "
+                        f"Manual SL=${price*(1-STOP_LOSS_PCT):.2f}  TP=${price*(1+TAKE_PROFIT_PCT):.2f}  "
                         f"Daily spend ${daily_spend:.2f}"
                     )
 
