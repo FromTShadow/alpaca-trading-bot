@@ -137,13 +137,13 @@ def reset_daily_spend_if_needed() -> None:
 # ── Alpaca data helpers ───────────────────────────────────────────────────────
 def get_bars(symbol: str) -> pd.DataFrame:
     end   = datetime.now(EST)
-    start = end - timedelta(hours=6)
+    start = end - timedelta(hours=8)
     req   = StockBarsRequest(
         symbol_or_symbols=symbol,
         timeframe=TIMEFRAME,
         start=start,
         end=end,
-        limit=60,
+        limit=100,
         feed=DataFeed.IEX,
     )
     bars = data_client.get_stock_bars(req)
@@ -151,6 +151,41 @@ def get_bars(symbol: str) -> pd.DataFrame:
     if isinstance(df.index, pd.MultiIndex):
         df = df.loc[symbol]
     return df.reset_index(drop=True)
+
+
+ATR_PERIOD  = 14
+ATR_SL_MIN  = 0.01   # 1% floor for stop-loss
+ATR_SL_MAX  = 0.04   # 4% ceiling for stop-loss
+
+
+def compute_atr_thresholds(df: pd.DataFrame, price: float) -> tuple[float, float, float]:
+    """
+    Calculate a 14-period ATR from bar data and derive dynamic SL/TP percentages.
+
+    Returns:
+        atr       -- raw ATR value in dollars
+        sl_pct    -- stop-loss % (ATR/price clamped to 1–4%)
+        tp_pct    -- take-profit % (always 2× sl_pct)
+    """
+    if len(df) < ATR_PERIOD + 1:
+        return 0.0, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+
+    high  = df["high"].astype(float)
+    low   = df["low"].astype(float)
+    close = df["close"].astype(float)
+
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+
+    atr    = tr.rolling(ATR_PERIOD).mean().iloc[-1]
+    sl_pct = float(atr) / price
+    sl_pct = max(ATR_SL_MIN, min(ATR_SL_MAX, sl_pct))
+    tp_pct = sl_pct * 2.0
+    return float(atr), sl_pct, tp_pct
 
 
 def get_position(symbol: str):
@@ -201,8 +236,10 @@ def check_closed_positions() -> None:
                         o.filled_at.astimezone(EST).strftime("%Y-%m-%d %H:%M:%S")
                         if o.filled_at else sell_time
                     )
-                    tp_thresh = entry["buy_price"] * (1 + TAKE_PROFIT_PCT * 0.90)
-                    sl_thresh = entry["buy_price"] * (1 - STOP_LOSS_PCT  * 0.90)
+                    entry_sl  = entry.get("sl_pct", STOP_LOSS_PCT)
+                    entry_tp  = entry.get("tp_pct", TAKE_PROFIT_PCT)
+                    tp_thresh = entry["buy_price"] * (1 + entry_tp * 0.90)
+                    sl_thresh = entry["buy_price"] * (1 - entry_sl * 0.90)
                     exit_reason = (
                         "take_profit" if sell_price >= tp_thresh else
                         "stop_loss"   if sell_price <= sl_thresh else
@@ -346,6 +383,16 @@ def run_strategy() -> None:
                 logger.warning(f"{symbol}: NaN MA values. Skipping.")
                 continue
 
+            # ATR-based dynamic thresholds — computed every scan and logged
+            atr, sl_pct, tp_pct = compute_atr_thresholds(df, price)
+            sl_dollar = price * sl_pct
+            tp_dollar = price * tp_pct
+            logger.info(
+                f"{symbol}: ATR({ATR_PERIOD})=${atr:.4f}  "
+                f"dyn-SL={sl_pct*100:.2f}% (${sl_dollar:.2f})  "
+                f"dyn-TP={tp_pct*100:.2f}% (${tp_dollar:.2f})"
+            )
+
             crossed_above = (ma_s_now > ma_l_now) and (ma_s_prev <= ma_l_prev)
             crossed_below = (ma_s_now < ma_l_now) and (ma_s_prev >= ma_l_prev)
             position      = get_position(symbol)
@@ -354,11 +401,13 @@ def run_strategy() -> None:
                 in_trade = symbol in open_trades
                 entry    = open_trades.get(symbol)
 
-            # Manual SL / TP check (fractional orders don't support bracket orders)
+            # Manual SL / TP check using ATR-derived thresholds stored at entry time
             if in_trade and entry and position is not None:
                 buy_px     = entry["buy_price"]
-                sl_trigger = buy_px * (1 - STOP_LOSS_PCT)
-                tp_trigger = buy_px * (1 + TAKE_PROFIT_PCT)
+                entry_sl   = entry.get("sl_pct", STOP_LOSS_PCT)
+                entry_tp   = entry.get("tp_pct", TAKE_PROFIT_PCT)
+                sl_trigger = buy_px * (1 - entry_sl)
+                tp_trigger = buy_px * (1 + entry_tp)
 
                 if price <= sl_trigger:
                     logger.info(
@@ -438,11 +487,15 @@ def run_strategy() -> None:
                             "ma_short":  ma_s_now,
                             "ma_long":   ma_l_now,
                             "order_id":  str(order.id),
+                            "sl_pct":    sl_pct,
+                            "tp_pct":    tp_pct,
+                            "atr":       atr,
                         }
 
                     logger.info(
                         f"{symbol}: Order {order.id} placed. "
-                        f"Manual SL=${price*(1-STOP_LOSS_PCT):.2f}  TP=${price*(1+TAKE_PROFIT_PCT):.2f}  "
+                        f"ATR-SL={sl_pct*100:.2f}% (${price*(1-sl_pct):.2f})  "
+                        f"ATR-TP={tp_pct*100:.2f}% (${price*(1+tp_pct):.2f})  "
                         f"Daily spend ${daily_spend:.2f}"
                     )
 

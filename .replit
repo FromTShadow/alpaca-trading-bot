@@ -27,6 +27,7 @@ ALPACA_BASE_URL = "5QE9LaSJGEFTBtPcA9dqmAMXaHi92AkdrTgraikK6WvG"
 DAILY_BUDGET = "80"
 SESSION_SECRET = "Mysecretkey123"
 VALUE = "8080"
+GITHUB_TOKEN = "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"
 
 [workflows]
 runButton = "Project"
