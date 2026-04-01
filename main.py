@@ -656,9 +656,19 @@ def startup_safety_check() -> bool:
 if __name__ == "__main__":
     ensure_csv_exists()
 
-    # Safety check — exits with code 1 on NO-GO
+    # Start Flask dashboard first so the webview is available immediately
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("Dashboard running on port 5000.")
+
+    # Safety check — logs result but doesn't exit so dashboard stays up
     if not startup_safety_check():
-        sys.exit(1)
+        logger.error("NO-GO: Bot trading disabled. Dashboard still running.")
+        logger.error("Check your ALPACA_API_KEY and ALPACA_SECRET_KEY secrets.")
+        logger.error("Make sure you are using Paper Trading keys (not Live keys) since PAPER_MODE=True.")
+        # Keep the process alive so the dashboard remains accessible
+        while True:
+            time_module.sleep(60)
 
     logger.info("Trading bot starting up.")
     logger.info(f"Watching: {', '.join(SYMBOLS)}")
@@ -668,11 +678,6 @@ if __name__ == "__main__":
     for s in SYMBOLS:
         w = symbol_weights[s]
         logger.info(f"  {s}: {w*100:.1f}%  (${MAX_DAILY_SPEND * w:.2f})")
-
-    # Start Flask in background thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("Dashboard running on port 5000.")
 
     run_strategy()
     schedule.every(5).minutes.do(run_strategy)

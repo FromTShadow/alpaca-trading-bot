@@ -23,6 +23,10 @@ expertMode = true
 [userenv.shared]
 ALPACA_API_KEY = "PKBMA4QCKGXNJFDIWJMKMEOKX3"
 ALPACA_SECRET_KEY = "https://paper-api.alpaca.markets/"
+ALPACA_BASE_URL = "5QE9LaSJGEFTBtPcA9dqmAMXaHi92AkdrTgraikK6WvG"
+DAILY_BUDGET = "80"
+SESSION_SECRET = "Mysecretkey123"
+VALUE = "8080"
 
 [workflows]
 runButton = "Project"
