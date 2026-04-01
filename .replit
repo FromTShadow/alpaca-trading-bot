@@ -1,9 +1,9 @@
 entrypoint = "main.py"
-modules = ["python-3.11"]
+modules = ["python-3.11", "web"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["glibcLocales"]
+packages = ["borgbackup", "cacert", "glibcLocales", "libxcrypt", "openssl", "pkg-config", "postgresql", "xsimd"]
 
 [unitTest]
 language = "python3"
@@ -12,8 +12,8 @@ language = "python3"
 requiredFiles = [".replit", "replit.nix"]
 
 [deployment]
-run = ["python3", "main.py"]
-deploymentTarget = "cloudrun"
+run = ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
+deploymentTarget = "autoscale"
 
 [agent]
 expertMode = true
@@ -21,6 +21,8 @@ expertMode = true
 [userenv]
 
 [userenv.shared]
+ALPACA_API_KEY = "PKBMA4QCKGXNJFDIWJMKMEOKX3"
+ALPACA_SECRET_KEY = "https://paper-api.alpaca.markets/"
 
 [workflows]
 runButton = "Project"
@@ -43,7 +45,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python main.py"
+args = "python3.11 main.py"
 waitForPort = 5000
 
 [[ports]]
