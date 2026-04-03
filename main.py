@@ -136,21 +136,49 @@ def reset_daily_spend_if_needed() -> None:
 
 # ── Alpaca data helpers ───────────────────────────────────────────────────────
 def get_bars(symbol: str) -> pd.DataFrame:
-    end   = datetime.now(EST)
+    """
+    Fetch up to 100 5-minute bars for *symbol*.
+    Tries the IEX free feed first; falls back to the account's default feed
+    (SIP) if IEX returns an empty result, which can happen when the feed is
+    not available for the current account type.
+    """
+    end   = datetime.now(pytz.utc)
     start = end - timedelta(hours=8)
-    req   = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=TIMEFRAME,
-        start=start,
-        end=end,
-        limit=100,
-        feed=DataFeed.IEX,
-    )
-    bars = data_client.get_stock_bars(req)
-    df   = bars.df
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.loc[symbol]
-    return df.reset_index(drop=True)
+
+    def _fetch(feed=None) -> pd.DataFrame:
+        kwargs: dict = dict(
+            symbol_or_symbols=symbol,
+            timeframe=TIMEFRAME,
+            start=start,
+            end=end,
+            limit=100,
+        )
+        if feed is not None:
+            kwargs["feed"] = feed
+        try:
+            bars = data_client.get_stock_bars(StockBarsRequest(**kwargs))
+            df   = bars.df
+            if df is None or df.empty:
+                return pd.DataFrame()
+            if isinstance(df.index, pd.MultiIndex):
+                lvl0 = df.index.get_level_values(0)
+                if symbol in lvl0:
+                    df = df.xs(symbol, level=0)
+                else:
+                    return pd.DataFrame()
+            return df.reset_index(drop=True)
+        except Exception as exc:
+            logger.warning(f"{symbol}: bar fetch error ({feed or 'default'} feed) — {exc}")
+            return pd.DataFrame()
+
+    # Primary: IEX (free, no subscription needed)
+    df = _fetch(DataFeed.IEX)
+    if df.empty:
+        logger.warning(f"{symbol}: IEX returned 0 bars — retrying with default feed.")
+        df = _fetch()          # SIP / best available for this account
+    if df.empty:
+        logger.warning(f"{symbol}: Default feed also returned 0 bars.")
+    return df
 
 
 ATR_PERIOD  = 14
@@ -364,8 +392,8 @@ def run_strategy() -> None:
     for symbol in SYMBOLS:
         try:
             df = get_bars(symbol)
-            if len(df) < LONG_MA + 1:
-                logger.warning(f"{symbol}: Only {len(df)} bars — need {LONG_MA+1}. Skipping.")
+            if len(df) < 10:
+                logger.warning(f"{symbol}: Only {len(df)} bars — need at least 10. Skipping.")
                 continue
 
             df["ma_short"] = df["close"].rolling(SHORT_MA).mean()
